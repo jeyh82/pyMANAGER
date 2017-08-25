@@ -10,7 +10,8 @@
 import pandas as pd									#PANDAS
 import auxiliary.database as database				#데이터베이스 모듈 불러오기
 import auxiliary.query as query						#쿼리 모듈 불러오기
-from datetime import date, timedelta				#날짜작업
+from datetime import 	date, \
+						timedelta					#날짜작업
 
 
 '''클래스 보조함수'''
@@ -26,11 +27,13 @@ def get_cust_name(cust_no):
 
 '''클래스'''
 class MarketDist(object):
-	"""ELS 시장분포 클래스 정의"""
+	"""ELS 시장분포 클래스 정의
+	"""
 
 	'''클래스 생성자 및 소멸자'''
 	def __init__(self):
-		"""클래스 생성자: 필요한 데이터베이스 연결 및 날짜정보 설정"""
+		"""클래스 생성자: 필요한 데이터베이스 연결 및 날짜정보 설정
+		"""		
 		self._dbRMS01 = database.Connection('spt','RMS01')
 		self._dbMYSQL = database.Connection('python','TESTDB')
 
@@ -44,18 +47,14 @@ class MarketDist(object):
 		self._to_full_year = '2100-12-31'
 
 		self.table_basic = \
-			pd.read_sql_table(
+			self._dbMYSQL.select_table(
 					table_name='els_market_basic_info',
-					con=self.dbMYSQL.engine,
 					index_col='ISIN_NO')
 
-		self.table_under = \
-			pd.read_sql_table(
+		self.table_asset = \
+			self._dbMYSQL.select_table(
 					table_name='view_els_market_underlying_info',
-					con=self.dbMYSQL.engine,
 					index_col='ISIN_NO')
-
-
 
 	'''접근자'''
 	@property
@@ -123,7 +122,7 @@ class MarketDist(object):
 		raise Exception("ERROR _ private member")
 
 	'''클래스 함수'''
-	def _load_info_basic(self, oper_name:str) -> pd.DataFrame:
+	def load_info_basic(self, oper_name:str) -> pd.DataFrame:
 		"""기본정보 조회
 		- 시장전체 ELS상품들의 기본정보를 조회
 		- 최종적으로는 MYSQL데이터베이스에 다시 입력하기 위한 용도로 활용
@@ -136,10 +135,9 @@ class MarketDist(object):
 		:raises Exception: 작업목록이 잘못된 경우 예외발생
 		:return: pd.DataFrame 형식으로 기본정보 조회하여 출력
 		"""
-
 		#현재시점에서 활성화되어 있는 상품에 대해서만
 		if oper_name == 'activeList':
-			name_table = 'els_market_basic_info'
+			table_name = 'els_market_basic_info'
 			bind_param = \
 				{'eval_date': self._eval_date,
 				 'prsv_rate': '0', 										#원금 비보장형의 경우만
@@ -150,9 +148,10 @@ class MarketDist(object):
 				 'to_eff_date': self._eval_date,
 				 'fr_exp_date': self._eval_date,						#만기일자 조회기준일 이후에서부터, 아주 먼 미래까지
 				 'to_exp_date': self._to_full_year}
+			
 		#특정기간동안 발행되었던 전체 상품에 대해서
 		elif oper_name == 'issueList':
-			name_table = 'els_market_issue_info'
+			table_name = 'els_market_issue_info'
 			bind_param = \
 				{'eval_date': self._eval_date,
 				 'prsv_rate': '100', 									#원금 보장여부: 관계없음
@@ -163,9 +162,10 @@ class MarketDist(object):
 				 'to_eff_date': self._to_this_year,
 				 'fr_exp_date': self._fr_full_year,						#만기상환일자: 관계없음
 				 'to_exp_date': self._to_full_year}
+			
 		#특정기간동안 상환되었던 전체 상품에 대해서
 		elif oper_name == 'exerciseList':
-			name_table = 'els_market_exercise_info'
+			table_name = 'els_market_exercise_info'
 			bind_param = \
 				{'eval_date': self._eval_date,
 				 'prsv_rate': '100', 									#원금 보장여부: 관계없음
@@ -180,32 +180,27 @@ class MarketDist(object):
 			raise Exception('ERROR _ invalid operation name')
 
 		#기본정보조회
-		df_basic = \
-			database.QueryItem(
-					sql=query._basic_sql,
-					engine=self._dbRMS01.engine,
-					col_info=query._basic_col,
-					index_col='ISIN_NO').bind(bind_param).execute()
-
-		df_basic['CUST_NO'] = df_basic['CUST_NO'].map(get_cust_name)
+		rtn_basic = \
+			self._dbRMS01.query(
+					sql=query.basic_sql,
+					bind=bind_param,
+					index_col='ISIN_NO')
+		rtn_basic['CUST_NO'] = rtn_basic['CUST_NO'].map(get_cust_name)
 
 		#데이터프레임 변수 인서트
-		database.DataFrameItem(
-				data_frame=df_basic,
-				table_name=name_table,
+		self._dbMYSQL.insert_table(
+				table_name=table_name,
+				data_frame=rtn_basic,
 				if_exists='replace',
-				engine=self._dbMYSQL.engine,
-				col_info=query._basic_col).execute()
-
+				col_info=query.basic_col)
+		
 		#제약조건 설정
-		database.QueryItem(
-				sql=query._alter_basic_sql,
-				engine=self._dbMYSQL.engine,
-				col_info=None,
-				index_col=None).bind({'name_table':name_table}).execute()
-
+		self._dbMYSQL.query(
+				sql=query.alter_basic_sql,
+				bind={'table_name':table_name})
+		
 		#쿼리결과값 반환
-		return df_basic
+		return rtn_basic
 
 	def _load_info_underlying(self):
 		"""기초자산 정보 조회
@@ -214,63 +209,47 @@ class MarketDist(object):
 		- 최근작업일자 이후, 현재작업일자 이전에 발생한 데이터들에 대해서만 처리리
 
 		:return: 기초자산정보 데이터프레임 형태로 반환
-
 		"""
 		#바인드변수 설정
 		bind_param = {'last_date':self._last_date,
 					  'eval_date':self._eval_date}
 
 		#기초자산정보조회
-		df_asset = \
-			database.QueryItem(
-					sql=query._asset_sql,
-					engine=self._dbRMS01.engine,
-					col_info=query._asset_col,
-					index_col='ISIN_NO').bind(bind_param).execute()
-
+		rtn_asset = \
+			self._dbRMS01.query(
+					sql=query.asset_sql,
+					bind=bind_param,
+					index_col='ISIN_NO')
+			
 		#기본정보조회 결과물 INSERT
-		database.DataFrameItem(
-				data_frame=df_asset,
+		self._dbMYSQL.insert_table(
 				table_name='els_market_underlying_info',
+				data_frame=rtn_asset,
 				if_exists='append',
-				engine=self._dbMYSQL.engine,
-				col_info=query._asset_col).execute()
-
-		#제약조건 설정
-		database.QueryItem(
-				sql=query._alter_asset_sql,
-				engine=self._dbMYSQL.engine,
-				col_info=None,
-				index_col=None).execute()
+				col_info=None)
+		#query.asset_col
 
 		#쿼리결과값 반환
-		return df_asset
+		return rtn_asset
 
 	def _delete_log(self):
-		"""작업일자를 삭제"""
-		#해당일자 로그가 존재하면 삭제
-		database.QueryItem(
-				sql=query._hist_delete_sql,
-				engine=self._dbMYSQL.engine,
-				col_info=None,
-				index_col=None).execute()
-
+		"""해당일자 로그가 존재하면 삭제
+		"""
+		self._dbMYSQL.query(
+				sql=query.hist_delete_sql,
+				bind={'oper_date':self._eval_date})
+		
 	def _create_log(self):
-		"""작업일자를 기록으로 남김"""
-		#해당일자 로그 새로 기록
-		database.QueryItem(
-				sql=query._hist_insert_sql,
-				engine=self._dbMYSQL.engine,
-				col_info=None,
-				index_col=None).execute()
-
+		"""작업일자를 기록으로 남김
+		"""
+		self._dbMYSQL.query(
+				sql=query.hist_insert_sql,
+				bind={'oper_date':self._eval_date})
+		
 	def _get_last_oper_date(self) -> str:
-		"""가장 최근 작업일자 조회"""
-		last_date = \
-			database.QueryItem(
-					sql=query._hist_select_sql,
-					engine=self._dbMYSQL.engine,
-					col_info=query._hist_select_col).execute().ix[0,0]
+		"""가장 최근 작업일자 조회
+		"""
+		last_date = self._dbMYSQL.query(sql=query.hist_select_sql).ix[0,0]
 
 		#문자열로 결과값 반환
 		return '{:%Y-%m-%d}'.format(last_date)
@@ -285,23 +264,23 @@ def main():
 	if distMarket.eval_date != distMarket.last_date:
 
 		#기본정보 조회 및 기록
-		listActive = distMarket._load_info_basic('activeList')
+		listActive = distMarket.load_info_basic('activeList')
 		print('기본정보가 입력되었습니다.')
 		print('입력된 데이터 개수: ' + str(len(listActive.index)) + '\n')
 		#print(listActive)
 
 		#발행내역 조회 및 기록
-		listIssue = distMarket._load_info_basic('issueList')
+		listIssue = distMarket.load_info_basic('issueList')
 		print('발행정보가 입력되었습니다.')
 		print('입력된 데이터 개수: ' + str(len(listIssue.index)) + '\n')
 		# print(listActive)
 
 		#상환내역 조회 및 기록
-		listExercise = distMarket._load_info_basic('exerciseList')
+		listExercise = distMarket.load_info_basic('exerciseList')
 		print('상환정보가 입력되었습니다.')
 		print('입력된 데이터 개수: ' + str(len(listExercise.index)) + '\n')
 		# print(listActive)
-'''
+
 		#시장분포 기초자산 정보조회
 		listUnderlying = distMarket._load_info_underlying()
 		print('기초자산정보가 입력되었습니다.')
@@ -313,7 +292,7 @@ def main():
 		distMarket._create_log()
 		print('작업일자가 기록되었습니다.')
 		print(distMarket.eval_date + '\n')
-'''
+
 
 '''스트립트 파일 직접 수행되는 경우에만 실행'''
 if __name__ == '__main__':
