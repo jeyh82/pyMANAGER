@@ -316,11 +316,18 @@ class Connection(object):
 				if isinstance(index_col, str):
 					index_col = index_col.lower()
 
-				rtn_value = \
-					pd.read_sql_query(
-							sql=self._sql,
-							con=self._engine,
-							index_col=index_col)
+				try:
+					rtn_value = \
+						pd.read_sql_query(
+								sql=self._sql,
+								con=self._engine,
+								index_col=self.index_col)
+				except:
+					rtn_value = \
+						pd.read_sql_query(
+								sql=self._sql,
+								con=self._engine,
+								index_col=index_col)
 
 				#컬럼명, 인덱스면 대문자로 변경
 				rtn_value.columns = map(str.upper, rtn_value.columns)
