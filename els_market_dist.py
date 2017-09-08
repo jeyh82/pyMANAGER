@@ -61,18 +61,6 @@ class MarketDist(object):
 		 78: 'BNP', 79: '하이' }
 	
 	_LIST_NAME_BIG_COMP = ['미래','KB','NH','삼성','한투','신한','신영','--']
-	'''
-	_LIST_COLOR_BIG_COMP = ['rgb(243,105,16)',
-							'rgb(251,203,53)',
-							'rgb(16,121,193)',
-							'rgb(0,82,165)',
-							'rgb(80,50,0)',
-							'rgb(0,108,183)',
-							'rgb(17,79,28)',
-							'rgb(0,132,133)',
-							'rgb(25,138,175)',
-							'rgb(169,169,169)']
-	'''
 	_LIST_COLOR_BIG_COMP = ['rgb(243,105,16)',
 							'rgb(251,203,53)',
 							'red',
@@ -143,7 +131,7 @@ class MarketDist(object):
 						other=self._table_asset,
 						how='inner')
 
-			#지수레벨정보 조인
+			#지수레벨정보 조인, 기준가격에 대해서 조인
 			table = \
 				pd.merge(left=table,
 						 right=self._table_index,
@@ -153,17 +141,23 @@ class MarketDist(object):
 
 			#지수레벨정보로부터 퍼포먼스(최초기준가대비 현재지수레벨) 계산
 			for idx in range(1,6):
-				latest_level = self._table_index.loc[self._last_date]
+				#최근일자 기준으로 계산
+				latest_level = self._table_index.loc[self._eval_date]
 				name_str = 'NAME_AST'+str(idx)
 				table['LVL_AST'+str(idx)] = \
 					table.apply(lambda row: np.NaN if row[name_str] not in self._LIST_INDEX else latest_level[row[name_str]]/row[row[name_str]], axis=1)
 
 			#불필요한 정보제거. 지수퍼프먼스만 남기고 지수레벨정보는 제거
-			table.drop(self._LIST_INDEX, axis=1, inplace=True)
+			#table.drop(self._LIST_INDEX, axis=1, inplace=True)
 
 			#워스트퍼포머 계산
 			col_lvl = ['LVL_AST'+str(x) for x in range(1,6)]
-			table['WORST'] = table.loc[:,col_lvl].min(axis=1)
+			col_name = ['NAME_AST'+str(x) for x in range(1,6)]
+			col_name.insert(0,'WORST_AST')
+
+			table['WORST_LVL'] = table.loc[:,col_lvl].min(axis=1)
+			table['WORST_AST'] = table.loc[:,col_lvl].idxmin(axis=1)
+			table['WORST_AST'] = table[col_name].apply(lambda row: np.NaN if row['WORST_AST'] is np.NaN else row['NAME_AST'+ row['WORST_AST'][-1]], axis=1)
 
 			#날짜에 해당하는 컬럼들마다 매월말일에 해당하는 컬럼추가
 			for col in ['STD_DATE', 'EFF_DATE', 'MAT_DATE']:
@@ -620,7 +614,7 @@ class MarketDist(object):
 def main():
 	#시장분포 객체생성
 	distMarket = MarketDist()
-	
+	'''
 	#발행내역 조회 및 기록
 	listIssue = distMarket.load_info_basic('listIssue')
 	print('발행정보가 입력되었습니다.')
@@ -659,7 +653,7 @@ def main():
 	distMarket._create_log()
 	print('작업일자가 기록되었습니다.')
 	print(distMarket.eval_date + '\n')
-	
+	'''
 	#print(distMarket.get_monthly_report())
 	#print(distMarket.get_monthly_report('SXE'))
 	#print(distMarket.get_monthly_report('HSC'))
