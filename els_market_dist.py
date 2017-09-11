@@ -17,11 +17,9 @@ import calendar										#달력작업
 from datetime import date, datetime, timedelta		#날짜작업
 from dateutil.relativedelta import relativedelta
 
-import matplotlib.pyplot as plt
-import plotly.graph_objs as go
+import seaborn as sns								#SEABORN
+import matplotlib.pyplot as plt						#MATPLOTLIB
 
-
-#pd.options.display.float_format = '{:,0f}'.format
 
 '''함수'''
 def _get_end_of_month(date: str, format_in: str, format_out: str = '%Y-%m-%d'):
@@ -51,24 +49,33 @@ class MarketDist(object):
 	"""ELS 시장분포 클래스 정의
 	"""
 	'''클래스 상수'''
-	_LIST_INDEX = ['KP2','NKY','HSC','SXE','SPX','HSI']
+	#하나의 상품이 가질 수 있는 최대 기초자산 개수
+	_MAX_DIM = 5
+
+	#숫자단위변환
+	_TO_ZO = 1000000.0
+	_TO_UK = 100.0
+
+	#퍼포먼스 BUMP비율 리스트
+	_LIST_INDEX_BUMP = [0.85, 0.90, 0.95, 1.00, 1.05, 1.10, 1.15]
+	_INDEX_BUMP_STEP = 0.05
+
+	#지수리스트	
+	_LIST_INDEX = ['ALL','KP2','NKY','HSC','SXE','SPX','HSI']
+	
+	#발행사리스트
 	_SPEC_COMP = \
 		{50: '신한', 51: '대신', 	52: '미래', 	59: '미래', 	53: '삼성',
-		 54: '신영', 55: 'NH', 	69: 'NH',	57: '한투',	58: 'KB',
+		 54: 'SY', 55: 'NH', 	69: 'NH',	57: '한투',	58: 'KB',
 		 77: 'KB', 	60: '맥쿼리',	61: '메리츠',	62: '교보', 	64: '유진',
 		 65: '한화', 66: '유안타',	67: '동부', 	68: 'SK', 	70: '하나',
 		 72: 'IBK', 73: '현대차',	74: 'SC', 	75: '노무라',	76: '키움',
 		 78: 'BNP', 79: '하이' }
+
+	#그래프 출력에 사용하는 관심발행사 리스트
+	_LIST_NAME_BIG_COMP = ['SY', 'ALL']
+	_LIST_COLOR_BIG_COMP = ['#114F1C','#A9A9A9']
 	
-	_LIST_NAME_BIG_COMP = ['미래','KB','NH','삼성','한투','신한','신영','--']
-	_LIST_COLOR_BIG_COMP = ['rgb(243,105,16)',
-							'rgb(251,203,53)',
-							'red',
-							'rgb(0,82,165)',
-							'rgb(80,50,0)',
-							'purple',
-							'rgb(17,79,28)',
-							'rgb(169,169,169)']
 
 	'''클래스 생성자 및 소멸자'''
 	def __init__(self):
@@ -133,31 +140,21 @@ class MarketDist(object):
 
 			#지수레벨정보 조인, 기준가격에 대해서 조인
 			table = \
-				pd.merge(left=table,
-						 right=self._table_index,
-						 how='left',
-						 left_on=['EFF_DATE'],
-						 right_index=True)
+				pd.merge(
+						left=table,
+						right=self._table_index,
+						how='left',
+						left_on=['EFF_DATE'],
+						right_index=True)
 
-			#지수레벨정보로부터 퍼포먼스(최초기준가대비 현재지수레벨) 계산
-			for idx in range(1,6):
-				#최근일자 기준으로 계산
-				latest_level = self._table_index.loc[self._eval_date]
-				name_str = 'NAME_AST'+str(idx)
-				table['LVL_AST'+str(idx)] = \
-					table.apply(lambda row: np.NaN if row[name_str] not in self._LIST_INDEX else latest_level[row[name_str]]/row[row[name_str]], axis=1)
-
-			#불필요한 정보제거. 지수퍼프먼스만 남기고 지수레벨정보는 제거
-			#table.drop(self._LIST_INDEX, axis=1, inplace=True)
-
-			#워스트퍼포머 계산
-			col_lvl = ['LVL_AST'+str(x) for x in range(1,6)]
-			col_name = ['NAME_AST'+str(x) for x in range(1,6)]
-			col_name.insert(0,'WORST_AST')
-
-			table['WORST_LVL'] = table.loc[:,col_lvl].min(axis=1)
-			table['WORST_AST'] = table.loc[:,col_lvl].idxmin(axis=1)
-			table['WORST_AST'] = table[col_name].apply(lambda row: np.NaN if row['WORST_AST'] is np.NaN else row['NAME_AST'+ row['WORST_AST'][-1]], axis=1)
+			#상환구조정보조인
+			table = \
+				pd.merge(
+						left=table,
+						right=self._table_struct,
+						how='left',
+						left_index=True,
+						right_index=True)
 
 			#날짜에 해당하는 컬럼들마다 매월말일에 해당하는 컬럼추가
 			for col in ['STD_DATE', 'EFF_DATE', 'MAT_DATE']:
@@ -241,12 +238,12 @@ class MarketDist(object):
 		:param cust_no:
 		:return:
 		"""
-		rtn_value = self._SPEC_COMP.get(cust_no, '--')
-		return rtn_value if rtn_value in self._LIST_NAME_BIG_COMP else '--'
+		rtn_value = self._SPEC_COMP.get(cust_no, 'ALL')
+		return rtn_value if rtn_value in self._LIST_NAME_BIG_COMP else 'ALL'
 
-	def load_info_basic(self, oper_name:str) -> pd.DataFrame:
-		"""기본정보 조회
-		- 시장전체 ELS상품들의 기본정보를 조회
+	def transfer_basic_info(self, oper_name:str) -> pd.DataFrame:
+		"""기본정보 조회하여 MYSQL에 저장
+		- 시장전체 ELS상품들의 기본정보를 조회하여 MYSQL에 저장
 		- 최종적으로는 MYSQL데이터베이스에 다시 입력하기 위한 용도로 활용
 		- 작업구분에 따라, 	현재시점에서 남아있는 상품들에 대해서 조회
 		 				특정기간동안 발행된 상품 조회
@@ -270,7 +267,7 @@ class MarketDist(object):
 				 'to_eff_date': self._fr_this_year,
 				 'fr_exp_date': self._fr_this_year,						#작년 말에서부터, 아주 먼 미래까지
 				 'to_exp_date': self._to_full_year}
-			
+
 		#특정기간동안 발행되었던 전체 상품에 대해서
 		elif oper_name == 'listIssue':
 			table_name = 'els_market_issue_info'
@@ -284,7 +281,7 @@ class MarketDist(object):
 				 'to_eff_date': self._eval_date,
 				 'fr_exp_date': self._fr_full_year,						#만기상환일자: 관계없음
 				 'to_exp_date': self._to_full_year}
-			
+
 		#특정기간동안 상환되었던 전체 상품에 대해서
 		elif oper_name == 'listExercise':
 			table_name = 'els_market_exercise_info'
@@ -314,18 +311,18 @@ class MarketDist(object):
 				data_frame=rtn_basic,
 				if_exists='replace',
 				col_info=query.basic_col)
-		
+
 		#제약조건 설정
 		self._dbMYSQL.query(
 				sql=query.alter_basic_sql,
 				bind={'table_name':table_name})
-		
+
 		#쿼리결과값 반환
 		return rtn_basic
 
-	def load_info_underlying(self):
-		"""기초자산 정보 조회
-		- 시장전체 ELS상품들의 기초자산 정보를 조회
+	def transfer_underlying_info(self):
+		"""기초자산 정보 조회하여 MYSQL에 저장
+		- 시장전체 ELS상품들의 기초자산 정보를 조회하여 MYSQL에 저장
 		- 최종적으로는 MYSQL데이터베이스에 다시 입력하기 위한 용도로 활용
 		- 최근작업일자 이후, 현재작업일자 이전에 발생한 데이터들에 대해서만 처리
 
@@ -342,7 +339,7 @@ class MarketDist(object):
 					sql=query.asset_sql,
 					bind=bind_param,
 					index_col='ISIN_NO')
-			
+
 		#조회 결과물 데이터베이스에 인서트
 		self._dbMYSQL.insert_table(
 				table_name='els_market_underlying_info',
@@ -353,7 +350,7 @@ class MarketDist(object):
 		#쿼리결과값 반환
 		return rtn_asset
 
-	def load_info_structure(self):
+	def transfer_structure_info(self):
 		"""상환구조 정보 조회
 		- 시장전체 ELS상품들의 상환구조 정보를 조회
 		- 최종적으로는 MYSQL데이터베이스에 다시 입력하기 위한 용도로 활용
@@ -392,14 +389,14 @@ class MarketDist(object):
 		self._dbMYSQL.query(
 				sql=query.hist_delete_sql,
 				bind={'oper_date':self._eval_date})
-		
+
 	def _create_log(self):
 		"""작업일자를 기록으로 남김
 		"""
 		self._dbMYSQL.query(
 				sql=query.hist_insert_sql,
 				bind={'oper_date':self._eval_date})
-		
+
 	def _get_last_oper_date(self) -> str:
 		"""가장 최근 작업일자 조회
 		"""
@@ -446,6 +443,42 @@ class MarketDist(object):
 		data = months.map(lambda x: datetime.strftime(x, '%Y-%m-%d'))
 		index = months.map(lambda x: datetime.strftime(x, '%y-%m'))
 		return pd.DataFrame(data=data, index=index, columns=['EOMONTH'])
+
+	def create_performance_column(self, table:pd.DataFrame, target_asset:str=None, ratio_mult_in:float=1.00):
+		"""테이블에 기초자산 퍼포먼스 컬럼추가
+		- LVL_ASTX 컬럼 추가됨: X번째 기초자산의 현재가/기준가 수준 기록
+		- WORST_LVL 컬럼 추가됨: LVL_ASTX중에서 가장 작은 숫자 기록
+		- WORST_AST 컬럼 추가됨: WORST_LVL을 기록한 기초자산의 이름 기록
+
+		:param table: 컬럼을 추가하고자 하는 테이블
+		:param target_asset: 지수 BUMP를 반영하고자 하는 기초자산 이름
+		:param ratio_mult_in: 지수 BUMP비율
+		:return: 없음
+		"""
+		#지수레벨정보로부터 퍼포먼스(최초기준가대비 현재지수레벨) 계산
+		for idx in range(1, self._MAX_DIM+1):
+			#최근일자 기준으로 계산
+			latest_level = self._table_index.loc[self._eval_date]
+			name_str = 'NAME_AST' + str(idx)
+			ratio_mult = 1.0 if target_asset != name_str else ratio_mult_in
+
+			table['LVL_AST' + str(idx)] = \
+				table.apply(
+						lambda row: np.NaN if row[name_str] not in self._LIST_INDEX else \
+									ratio_mult*latest_level[row[name_str]]/row[row[name_str]], axis=1)
+
+		#워스트퍼포머 계산
+		col_lvl = ['LVL_AST' + str(x) for x in range(1, self._MAX_DIM+1)]
+		col_name = ['NAME_AST' + str(x) for x in range(1, self._MAX_DIM+1)]
+		col_name.insert(0, 'WORST_AST')
+
+		table['WORST_LVL'] = table.loc[:, col_lvl].min(axis=1)
+		table['WORST_AST'] = table.loc[:, col_lvl].idxmin(axis=1)
+		table['WORST_AST'] = \
+			table[col_name].apply(
+				lambda row: np.NaN if row['WORST_AST'] is np.NaN else \
+							row['NAME_AST' + row['WORST_AST'][-1]], axis=1)
+		#table['WORST_LVL'] = int(table['WORST_LVL']/0.05)*0.05
 
 	def get_table_basic(self, table_name:str, date:str=None, asset:str=None, comp:str=None, prsv:float=None, order:int=0):
 		"""특정 기초자산을 포함하는, 연초기준 활성화 목록 반환
@@ -515,6 +548,15 @@ class MarketDist(object):
 		#결과값 반환
 		return rtn_table
 
+	def set_monthly_figure(self):
+		dict_grp_fig = {}
+		for idx_asset, item_asset in enumerate(self._LIST_INDEX):
+			for idx_prsv, item_prsv in enumerate(['YES', 'NO']):
+				grp_fig = self.draw_monthly_figure(item_asset, item_prsv)
+				key = item_asset + item_prsv
+				dict_grp_fig.update({key:grp_fig})
+		return dict_grp_fig
+
 	def get_monthly_report(self, asset:str=None, comp:str=None, prsv:float=100.0, order:int=0):
 		"""특정 기초자산을 포함하는, 월간합계 보고서 반환
 
@@ -554,10 +596,56 @@ class MarketDist(object):
 
 		#인텍스를 JAN, FEB 형식으로 변경
 		rtn_table.index = rtn_table.index.map(lambda x: calendar.month_abbr[int(x[3:5])])
-		
+
 		#상환금액 정보의 부호를 반대로 변경
 		rtn_table[['ISSUE','EXERCISE','ACTIVE']]=rtn_table[['ISSUE','EXERCISE','ACTIVE']].astype(int)
 		rtn_table['EXERCISE'] = rtn_table['EXERCISE'].map(lambda x:x*-1)
+
+		#결과값 반환
+		return rtn_table
+
+	def get_exercise_report(self, asset:str=None):
+		"""특정 기초자산을 포함하는, 월간상환 보고서 반환
+
+		:param asset: 해당 기초자산을 포함하는 경우에 대해서만
+		:return: 월간상환 보고서
+		"""
+		#월간발행보고서 기본세팅
+		num_days = 20
+		date_index = pd.date_range(date.today(),periods=num_days*2, freq='D')
+		rtn_table = pd.DataFrame(index=date_index)
+		rtn_table = rtn_table[rtn_table.index.weekday<5][0:num_days]
+
+		#해당기초자산 포함하는 현재활성화 리스트
+		table = self.get_active_list(None, asset, None, 0.0, 0)
+
+		#기초자산 BUMP스케줄에 따라서
+		for idx_bump, item_bump in enumerate(self._LIST_INDEX_BUMP):
+			#BUMP스케줄에 따라서 퍼포먼스 기록
+			self.create_performance_column(table, asset, item_bump)
+
+			#상환보고서 포함기준
+			mask = (table['EXE_DATE'] <= date_index[-1]) & \
+				   (table['WORST_LVL'] >= item_bump) & \
+				   (table['WORST_LVL'] < item_bump+self._INDEX_BUMP_STEP)
+
+			#상환보고서 집계
+			col_name = str(int(round(item_bump*100,0)))+"≤X<"+str(int(round((self._INDEX_BUMP_STEP+item_bump)*100,0)))
+
+			sum_table = \
+				table[mask]\
+					.groupby('EXE_DATE')['REMAIN_AMT']\
+					.agg(['sum'])\
+					.rename(columns={'sum':col_name})
+
+			#BUMP스케줄에 따라서 결합
+			rtn_table =\
+				pd.merge(
+						left=rtn_table,
+						right=sum_table,
+						how='left',
+						left_index=True,
+						right_index=True)
 
 		#결과값 반환
 		return rtn_table
@@ -580,55 +668,69 @@ class MarketDist(object):
 		asset = None if asset == 'ALL' else asset
 		prsv = 100.0 if prsv == 'YES' else 0.0
 
-		#그래프 리스트 초기화
-		fig = []
+		#그래프 데이터 초기화
+		fig, (ax_issue, ax_exercise, ax_active) = \
+			plt.subplots(3, 1, figsize=(25, 20), sharex=True)
+		grp_fig = [ax_issue, ax_exercise, ax_active, fig]
 
 		#집계금액에 따라 순환
 		for idx_col, item_col in enumerate(['ISSUE', 'EXERCISE', 'ACTIVE']):
-			#스택데이터 초기화
-			data = []
+
+			#더미테이블
+			tbl = self.get_monthly_report(asset, 'ALL', prsv)
+			margin_bottom = np.zeros(len(tbl.index))
 
 			#발행사에 따라 순환
 			for idx_comp, item_comp in enumerate(self._LIST_NAME_BIG_COMP):
 				#발행사에 따라 월간보고서 집계 및 그래프출력
 				tbl = self.get_monthly_report(asset, item_comp, prsv)
-				trace_comp = go.Bar(
-						x=tbl.index,
-						y=round(tbl[item_col]/1000000.0,2),
-						name=item_comp,
-						opacity=1.0,
-						marker=dict(color=self._LIST_COLOR_BIG_COMP[idx_comp],
-									line=dict(color='rgb(242,243,244)',width=0.75,),))
-				data.append(trace_comp)
+				values = list(tbl.loc[:,item_col])
 
-			layout = go.Layout(barmode='stack',
-							   title=title[idx_col],
-							   font=dict(size=10))
-			fig.append(go.Figure(data=data, layout=layout))
+				tbl.plot.bar(
+						x=tbl.index,
+						y=item_col,
+						ax=grp_fig[idx_col],
+						color=self._LIST_COLOR_BIG_COMP[idx_comp],
+						stacked=True,
+						bottom=margin_bottom,
+						label=item_comp)
+				margin_bottom += values
 
 		#결과값 반환
-		return fig
+		return grp_fig
+
+	def draw_exercise_figure(self, asset:str=None):
+
+		#그래프 제목설정
+		title = ['테스트']
+
+		#입력변수 필터링
+		asset = None if asset == 'ALL' else asset
+
+
+
 
 
 '''메인함수'''
 def main():
 	#시장분포 객체생성
 	distMarket = MarketDist()
+	distMarket.set_monthly_figure()
 	'''
 	#발행내역 조회 및 기록
-	listIssue = distMarket.load_info_basic('listIssue')
+	listIssue = distMarket.transfer_basic_info('listIssue')
 	print('발행정보가 입력되었습니다.')
 	print('입력된 데이터 개수: ' + str(len(listIssue.index)) + '\n')
 	#print(listActive)
 
 	#기본정보 조회 및 기록
-	listActive = distMarket.load_info_basic('listInit')
+	listActive = distMarket.transfer_basic_info('listInit')
 	print('기본정보가 입력되었습니다.')
 	print('입력된 데이터 개수: ' + str(len(listActive.index)) + '\n')
 	#print(listActive)
 
 	#상환내역 조회 및 기록
-	listExercise = distMarket.load_info_basic('listExercise')
+	listExercise = distMarket.transfer_basic_info('listExercise')
 	print('상환정보가 입력되었습니다.')
 	print('입력된 데이터 개수: ' + str(len(listExercise.index)) + '\n')
 	#print(listActive)
@@ -637,13 +739,13 @@ def main():
 	if distMarket.eval_date != distMarket.last_date:
 
 		#시장분포 기초자산 정보조회
-		listUnderlying = distMarket.load_info_underlying()
+		listUnderlying = distMarket.transfer_underlying_info()
 		print('기초자산정보가 입력되었습니다.')
 		print('입력된 데이터 개수: ' + str(len(listUnderlying.index)) + '\n')
 		#print(listUnderlying)
 	
 		#시장분포 상환구조 정보조회
-		listExercise = distMarket.load_info_structure()
+		listExercise = distMarket.transfer_structure_info()
 		print('구조정보가 입력되었습니다.')
 		print('입력된 데이터 개수: ' + str(len(listExercise['ISIN_NO'])) + '\n')
 		##print(listExercise)
