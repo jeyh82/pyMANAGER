@@ -17,9 +17,41 @@ import calendar										#달력작업
 from datetime import date, datetime, timedelta		#날짜작업
 from dateutil.relativedelta import relativedelta
 
-import seaborn as sns								#SEABORN
 import matplotlib.pyplot as plt						#MATPLOTLIB
+from matplotlib import font_manager, rc				#MATPLOTLIB 한글폰트문제
+import seaborn as sns								#SEABORN
 
+pd.options.mode.chained_assignment = None
+
+sns.set_context(
+		"paper",
+		rc={"font.size":12,
+			"axes.titlesize":13,
+			"axes.labelsize":12})
+sns.set_style("whitegrid",{'grid.linestyle': '--'})
+
+font_name = font_manager.FontProperties(fname="c:/Windows/Fonts/NanumBarunGothicBold.ttf").get_name()
+rc('font', family=font_name)
+
+
+#plt.style.use('seaborn-white')
+#sns.set(font_scale=4.0)
+
+html_pygal = """
+<!DOCTYPE html>
+<html>
+  <head>
+  <script type="text/javascript" src="http://kozea.github.com/pygal.js/javascripts/svg.jquery.js"></script>
+  <script type="text/javascript" src="http://kozea.github.com/pygal.js/javascripts/pygal-tooltips.js"></script>
+    <!-- ... -->
+  </head>
+  <body>
+    <figure>
+      {pygal_render}
+    </figure>
+  </body>
+</html>
+"""
 
 '''함수'''
 def _get_end_of_month(date: str, format_in: str, format_out: str = '%Y-%m-%d'):
@@ -53,12 +85,13 @@ class MarketDist(object):
 	_MAX_DIM = 5
 
 	#숫자단위변환
-	_TO_ZO = 1000000.0
-	_TO_UK = 100.0
+	_TO_ZO 		= 1000000.0
+	_TO_H_UK 	= 10000.0
+	_TO_UK 		= 100.0
 
 	#퍼포먼스 BUMP비율 리스트
-	_LIST_INDEX_BUMP = [0.85, 0.90, 0.95, 1.00, 1.05, 1.10, 1.15]
-	_INDEX_BUMP_STEP = 0.05
+	_INDEX_BUMP_STEP = 1.0
+	_LIST_INDEX_BUMP = [x/1.0 for x in range(85, 115, 1)]
 
 	#지수리스트	
 	_LIST_INDEX = ['ALL','KP2','NKY','HSC','SXE','SPX','HSI']
@@ -66,16 +99,17 @@ class MarketDist(object):
 	#발행사리스트
 	_SPEC_COMP = \
 		{50: '신한', 51: '대신', 	52: '미래', 	59: '미래', 	53: '삼성',
-		 54: 'SY', 55: 'NH', 	69: 'NH',	57: '한투',	58: 'KB',
+		 54: '신영', 55: 'NH', 	69: 'NH',	57: '한투',	58: 'KB',
 		 77: 'KB', 	60: '맥쿼리',	61: '메리츠',	62: '교보', 	64: '유진',
 		 65: '한화', 66: '유안타',	67: '동부', 	68: 'SK', 	70: '하나',
 		 72: 'IBK', 73: '현대차',	74: 'SC', 	75: '노무라',	76: '키움',
 		 78: 'BNP', 79: '하이' }
 
 	#그래프 출력에 사용하는 관심발행사 리스트
-	_LIST_NAME_BIG_COMP = ['SY', 'ALL']
+	#_LIST_NAME_BIG_COMP = ['미래','KB','NH','삼성','한투','신한','신영','기타']
+	#_LIST_COLOR_BIG_COMP = ['#F36910','#FBCB35','#FF0000','#0052A5','#503200','#551A8B','#114F1C','#A9A9A9']
+	_LIST_NAME_BIG_COMP = ['신영','기타']
 	_LIST_COLOR_BIG_COMP = ['#114F1C','#A9A9A9']
-	
 
 	'''클래스 생성자 및 소멸자'''
 	def __init__(self):
@@ -112,8 +146,16 @@ class MarketDist(object):
 		self._table_index = \
 			self._dbRMS01.query(
 					sql=query.index_sql,
-					bind={'date_from': '2014-01-01'},
+					bind={'date_from': '2014-01-01',
+						  'eval_date':self._eval_date},
 					index_col='STD_DATE')
+
+		#가장최근일자 인덱스가격
+		self._latest_index = \
+			self._table_index.tail(1)
+
+		#직전기준일 조회
+		self._index_date = self._latest_index.reset_index().iat[0,0].strftime('%Y-%m-%d')
 
 		#기본정보 테이블 3세트 불러오기
 		self._table_basic = [None, None, None]
@@ -197,6 +239,14 @@ class MarketDist(object):
 	def to_full_year(self):
 		return self._to_full_year
 
+	@property
+	def index_date(self):
+		return self._index_date
+
+	@property
+	def latest_index(self):
+		return self._latest_index
+
 	@dbRMS01.setter
 	def dbRMS01(self, value):
 		raise Exception("ERROR _ private member")
@@ -238,8 +288,8 @@ class MarketDist(object):
 		:param cust_no:
 		:return:
 		"""
-		rtn_value = self._SPEC_COMP.get(cust_no, 'ALL')
-		return rtn_value if rtn_value in self._LIST_NAME_BIG_COMP else 'ALL'
+		rtn_value = self._SPEC_COMP.get(cust_no, '기타')
+		return rtn_value if rtn_value in self._LIST_NAME_BIG_COMP else '기타'
 
 	def transfer_basic_info(self, oper_name:str) -> pd.DataFrame:
 		"""기본정보 조회하여 MYSQL에 저장
@@ -444,7 +494,7 @@ class MarketDist(object):
 		index = months.map(lambda x: datetime.strftime(x, '%y-%m'))
 		return pd.DataFrame(data=data, index=index, columns=['EOMONTH'])
 
-	def create_performance_column(self, table:pd.DataFrame, target_asset:str=None, ratio_mult_in:float=1.00):
+	def create_performance_column(self, table:pd.DataFrame, target_asset:str=None, ratio_mult_in:float=100.0):
 		"""테이블에 기초자산 퍼포먼스 컬럼추가
 		- LVL_ASTX 컬럼 추가됨: X번째 기초자산의 현재가/기준가 수준 기록
 		- WORST_LVL 컬럼 추가됨: LVL_ASTX중에서 가장 작은 숫자 기록
@@ -458,34 +508,39 @@ class MarketDist(object):
 		#지수레벨정보로부터 퍼포먼스(최초기준가대비 현재지수레벨) 계산
 		for idx in range(1, self._MAX_DIM+1):
 			#최근일자 기준으로 계산
-			latest_level = self._table_index.loc[self._eval_date]
+			latest_level = self._latest_index.reset_index()
 			name_str = 'NAME_AST' + str(idx)
-			ratio_mult = 1.0 if target_asset != name_str else ratio_mult_in
 
 			table['LVL_AST' + str(idx)] = \
 				table.apply(
 						lambda row: np.NaN if row[name_str] not in self._LIST_INDEX else \
-									ratio_mult*latest_level[row[name_str]]/row[row[name_str]], axis=1)
+									(ratio_mult_in if target_asset == row[name_str] else 100.0)* \
+									latest_level.at[0,row[name_str]]/row[row[name_str]], axis=1)
 
 		#워스트퍼포머 계산
 		col_lvl = ['LVL_AST' + str(x) for x in range(1, self._MAX_DIM+1)]
 		col_name = ['NAME_AST' + str(x) for x in range(1, self._MAX_DIM+1)]
 		col_name.insert(0, 'WORST_AST')
 
-		table['WORST_LVL'] = table.loc[:, col_lvl].min(axis=1)
-		table['WORST_AST'] = table.loc[:, col_lvl].idxmin(axis=1)
+		table['WORST_LVL'] = table[col_lvl].min(axis=1)
+		table['WORST_AST'] = table[col_lvl].idxmin(axis=1)
 		table['WORST_AST'] = \
-			table[col_name].apply(
+			table.apply(
 				lambda row: np.NaN if row['WORST_AST'] is np.NaN else \
 							row['NAME_AST' + row['WORST_AST'][-1]], axis=1)
-		#table['WORST_LVL'] = int(table['WORST_LVL']/0.05)*0.05
 
 	def get_table_basic(self, table_name:str, date:str=None, asset:str=None, comp:str=None, prsv:float=None, order:int=0):
 		"""특정 기초자산을 포함하는, 연초기준 활성화 목록 반환
 
-		:param asset: 해당 기초자산을 포함하는 항목에 대해서만
+		:param table_name: 집계대상에 따라 테이블이름 설정
+		:param date: 기준일자 입력
+		:param asset: 특정 기초자산 포함하는 경우에만 
+		:param comp: 특정발생사가 발행한 상품에 대해서만
+		:param prsv: 입력된 원금보장레벨 이하에 대해서만 
+		:param order: 10단위 숫자제거		
 		:return: 연초기준 활성화목록
 		"""
+		#계산에 필요한 테이블설정
 		if table_name == 'INITIAL':
 			table = self._table_basic[0]
 		elif table_name == 'ISSUE':
@@ -495,30 +550,40 @@ class MarketDist(object):
 		else:
 			raise Exception
 
+		#노셔널 10단위 제거
 		for col in ('FIRST_AMT','REMAIN_AMT'):
 			table[col] = round(table[col]/(10**order))
 			table[col] = table[col].astype(int)
 
+		#날짜에 따라 필터링
 		if date is not None:
 			mask = self._get_mask_date(table, date)
 			table = table[mask]
 
+		#기초자산에 따라필터링
 		if asset is not None:
 			mask = self._get_mask_asset(table,asset)
 			table = table[mask]
 
+		#발행사에 따라 필터링
 		if comp is not None:
 			table = table[table['COMP']==comp]
 
+		#원금보장비율에 따라 필터링
 		if prsv is not None:
 			table = table[table['PRSV_RATE']<=prsv]
-
+		
+		#필터링된 결과값 반환
 		return table
 
 	def get_active_list(self, date:str=None, asset:str=None, comp:str=None, prsv:float=100.0, order:int=0) -> pd.DataFrame:
 		"""기준일자 시점에서 활성화 목록 반환
 
-		:param date_ref: 기준일자 입력
+		:param date: 기준일자 입력
+		:param asset: 특정 기초자산 포함하는 경우에만 
+		:param comp: 특정발생사가 발행한 상품에 대해서만
+		:param prsv: 입력된 원금보장레벨 이하에 대해서만 
+		:param order: 10단위 숫자제거
 		:return: 기준일자 시점의 활성화 목록
 		"""
 		#기본테이블 조회
@@ -549,18 +614,49 @@ class MarketDist(object):
 		return rtn_table
 
 	def set_monthly_figure(self):
+		"""월간 금액 그래프결과를 기초자산별로 사전형태로 그루핑하여 반환
+
+		:return: 그래프결과 사전 반환
+		"""		
+		#결과값 초기화
 		dict_grp_fig = {}
+		
+		#기초자산에 대해서, 원금보장포함여부에 대해서 루프
 		for idx_asset, item_asset in enumerate(self._LIST_INDEX):
-			for idx_prsv, item_prsv in enumerate(['YES', 'NO']):
+			for idx_prsv, item_prsv in enumerate(['YES']):
+				#TODO 원금비보장까지 포함하는 경우에 대해서만 처리하기로 한다. 나중에 계산속도에 여력이 생기면 추가하는 것으로 하자
+				#데이터하나씩 추가
 				grp_fig = self.draw_monthly_figure(item_asset, item_prsv)
 				key = item_asset + item_prsv
 				dict_grp_fig.update({key:grp_fig})
+		
+		#결과값 반환
 		return dict_grp_fig
+
+	def set_exercise_figure(self):
+		"""일별 행사가격 그래프 결과를 기초자산별로 계산하여 사전형태로 반환
+
+		:return: 그래프결과 사전 반환
+		"""
+		#결과값 초기화
+		dict_fig = {}
+
+		#기초자산에 대해서 루프
+		for idx_asset, item_asset in enumerate(self._LIST_INDEX[1:]):
+			#데이터하나씩 추가
+			fig, ax = self.draw_exercise_figure(item_asset)
+			dict_fig.update({item_asset:[fig, ax]})
+		
+		#결과값 반환
+		return dict_fig
 
 	def get_monthly_report(self, asset:str=None, comp:str=None, prsv:float=100.0, order:int=0):
 		"""특정 기초자산을 포함하는, 월간합계 보고서 반환
 
 		:param asset: 해당 기초자산을 포함하는 경우에 대해서만
+		:param comp: 해당 발행사가 발행한 경우에 대해서만
+		:param prsv: 해당 원금보장비율 이하에 대해서만 
+		:param order: 10단위 숫자제거
 		:return: 월간합계 보고서
 		"""
 		#발행정보, 상환정보 조회
@@ -597,24 +693,19 @@ class MarketDist(object):
 		#인텍스를 JAN, FEB 형식으로 변경
 		rtn_table.index = rtn_table.index.map(lambda x: calendar.month_abbr[int(x[3:5])])
 
-		#상환금액 정보의 부호를 반대로 변경
-		rtn_table[['ISSUE','EXERCISE','ACTIVE']]=rtn_table[['ISSUE','EXERCISE','ACTIVE']].astype(int)
-		rtn_table['EXERCISE'] = rtn_table['EXERCISE'].map(lambda x:x*-1)
-
 		#결과값 반환
 		return rtn_table
 
-	def get_exercise_report(self, asset:str=None):
+	def get_exercise_report(self, asset:str, period:int):
 		"""특정 기초자산을 포함하는, 월간상환 보고서 반환
 
 		:param asset: 해당 기초자산을 포함하는 경우에 대해서만
+		:param period: 해당 기간동안에 대해서만 (단위: 월)
 		:return: 월간상환 보고서
 		"""
-		#월간발행보고서 기본세팅
-		num_days = 20
-		date_index = pd.date_range(date.today(),periods=num_days*2, freq='D')
-		rtn_table = pd.DataFrame(index=date_index)
-		rtn_table = rtn_table[rtn_table.index.weekday<5][0:num_days]
+		#기초자산 입력값이 없으면 에러발생
+		if asset is None:
+			raise Exception("ERROR _ invalid input 'asset'")
 
 		#해당기초자산 포함하는 현재활성화 리스트
 		table = self.get_active_list(None, asset, None, 0.0, 0)
@@ -625,27 +716,28 @@ class MarketDist(object):
 			self.create_performance_column(table, asset, item_bump)
 
 			#상환보고서 포함기준
-			mask = (table['EXE_DATE'] <= date_index[-1]) & \
-				   (table['WORST_LVL'] >= item_bump) & \
-				   (table['WORST_LVL'] < item_bump+self._INDEX_BUMP_STEP)
+			mask = (table['EXE_DATE'] <= date.today()+relativedelta(months=period)) & \
+				   (table['WORST_AST'] == asset) & \
+				   (table['EXE_LVL'] >= table['WORST_LVL']) & \
+				   (table['EXE_LVL'] < table['WORST_LVL']+self._INDEX_BUMP_STEP)
 
-			#상환보고서 집계
-			col_name = str(int(round(item_bump*100,0)))+"≤X<"+str(int(round((self._INDEX_BUMP_STEP+item_bump)*100,0)))
+			#행사가격 표시
+			table.loc[mask,'K_LBOUND'] = item_bump
 
-			sum_table = \
-				table[mask]\
-					.groupby('EXE_DATE')['REMAIN_AMT']\
-					.agg(['sum'])\
-					.rename(columns={'sum':col_name})
+		#최종그래프 작업에 포함되는 데이터만 필터링
+		mask = (table['K_LBOUND'] >= self._LIST_INDEX_BUMP[0]) & \
+			   (table['K_LBOUND'] <= self._LIST_INDEX_BUMP[-1] + self._INDEX_BUMP_STEP)
+		
+		#필터링된 데이터 그룹별로 합계계산
+		rtn_table = \
+			table[mask]\
+				.reset_index()\
+				.groupby(['EXE_DATE','K_LBOUND'])['REMAIN_AMT']\
+				.agg(['sum'])\
+				.rename(columns={'sum':'REMAIN_AMT'})
 
-			#BUMP스케줄에 따라서 결합
-			rtn_table =\
-				pd.merge(
-						left=rtn_table,
-						right=sum_table,
-						how='left',
-						left_index=True,
-						right_index=True)
+		#100억단위로 변경
+		rtn_table['REMAIN_AMT'] /= self._TO_H_UK
 
 		#결과값 반환
 		return rtn_table
@@ -654,15 +746,20 @@ class MarketDist(object):
 		"""월간합계보고서 출력
 		- get_monthly_report에서 가져오는 데이터프레임을 발행사별로 출력
 		- 순서대로, 발행액, 상환액, 잔존금액
-
+		
+		:param asset: 특정기초자산에 대해서만 집계하는 경우 
+		:param prsv: 원금보장형 포함여부
 		:return: 그래프, 축 반환
 		"""
 		#그래프 제목설정
-		title = ['월별발행금액(단위:조)\n기초자산:{asset}, ELB포함:{prsv}',
-				 '월별상환금액(단위:조)\n기초자산:{asset}, ELB포함:{prsv}',
-				 '월별발행잔액(단위:조)\n기초자산:{asset}, ELB포함:{prsv}']
+		title = ['월별발행금액 (단위:조)\n기초자산:{asset}, ELB포함:{prsv}' + '\n',
+				 '월별상환금액 (단위:조)\n기초자산:{asset}, ELB포함:{prsv}' + '\n',
+				 '월별발행잔액 (단위:조)\n기초자산:{asset}, ELB포함:{prsv}' + '\n']
 		title = [item.replace('{asset}',asset) for item in title]
 		title = [item.replace('{prsv}', prsv) for item in title]
+
+		#그래프변수 설정
+		alpha = 0.6
 
 		#입력변수 필터링
 		asset = None if asset == 'ALL' else asset
@@ -670,53 +767,159 @@ class MarketDist(object):
 
 		#그래프 데이터 초기화
 		fig, (ax_issue, ax_exercise, ax_active) = \
-			plt.subplots(3, 1, figsize=(25, 20), sharex=True)
+			plt.subplots(3, 1, figsize=(11, 15))
 		grp_fig = [ax_issue, ax_exercise, ax_active, fig]
+		plt.subplots_adjust(hspace=0.4)
 
 		#집계금액에 따라 순환
 		for idx_col, item_col in enumerate(['ISSUE', 'EXERCISE', 'ACTIVE']):
-
-			#더미테이블
-			tbl = self.get_monthly_report(asset, 'ALL', prsv)
-			margin_bottom = np.zeros(len(tbl.index))
+			#스택 데이터 초기화
+			list_y_values = []
+			y_values = np.zeros(12)
+			list_legend = []
 
 			#발행사에 따라 순환
 			for idx_comp, item_comp in enumerate(self._LIST_NAME_BIG_COMP):
-				#발행사에 따라 월간보고서 집계 및 그래프출력
+				#발행사에 따라 월간보고서 집계
 				tbl = self.get_monthly_report(asset, item_comp, prsv)
-				values = list(tbl.loc[:,item_col])
 
-				tbl.plot.bar(
-						x=tbl.index,
-						y=item_col,
+				#월간보고서에서 리스트 집계
+				x_values = list(tbl.index)
+				col_values = list(round(tbl[item_col].astype(float)/self._TO_ZO,2))		#조단위로 수정
+
+				#스택데이터 누적
+				y_values = [val_col+val_y for val_col,val_y in zip(col_values, y_values)]
+				list_y_values.insert(0, y_values)
+				
+				#범례설정
+				legend = \
+					plt.Rectangle(
+							(0,0),1,1,
+							fc=self._LIST_COLOR_BIG_COMP[(idx_comp+1)*-1],
+							alpha=alpha,
+							edgecolor='black')
+				list_legend.insert(0, legend)
+
+			#스택그래프 출력
+			for idx_comp, item_comp in enumerate(self._LIST_NAME_BIG_COMP):
+				sns.barplot(
+						x=x_values,
+						y=list_y_values[idx_comp],
 						ax=grp_fig[idx_col],
-						color=self._LIST_COLOR_BIG_COMP[idx_comp],
-						stacked=True,
-						bottom=margin_bottom,
-						label=item_comp)
-				margin_bottom += values
+						color=self._LIST_COLOR_BIG_COMP[(idx_comp+1)*-1],
+						alpha=alpha,
+						linewidth=1.5,
+						edgecolor='black')
 
-		#결과값 반환
+			#그래프설정
+			yticks = ['{:3,.2f}'.format(tick) for tick in grp_fig[idx_col].get_yticks()]
+			grp_fig[idx_col].set_yticklabels(yticks)
+			grp_fig[idx_col].set_title(title[idx_col], fontstyle='italic')
+			grp_fig[idx_col].tick_params(labelsize=12)
+			grp_fig[idx_col].grid(True, which='both')
+			grp_fig[idx_col].legend(
+					list_legend,
+					self._LIST_NAME_BIG_COMP,
+					loc='right',
+					ncol=1,
+					bbox_to_anchor=(1.15,0.5),
+					prop={'size':12})
+
+		#그래프 반환
 		return grp_fig
 
-	def draw_exercise_figure(self, asset:str=None):
+	def draw_exercise_figure(self, asset:str, period:int=1):
+		"""일별행사가격분포 리포트 출력
+
+		:param asset: 분포작성을 원하는 기초자산명
+		:return: 그래프 반환
+		"""
 
 		#그래프 제목설정
-		title = ['테스트']
+		title = '일별행사가격분포 (단위:백억)\n기초자산:' + asset + '\n'
 
 		#입력변수 필터링
-		asset = None if asset == 'ALL' else asset
+		if 	asset is None or \
+			not asset in self._LIST_INDEX:
+			raise Exception("ERROR _ invalid input 'asset'")
 
+		#그래프 데이터 초기화
+		fig, ax = plt.subplots(figsize=(15, 11))
 
+		#기초자산에 따라 월간보고서 집계
+		tbl = self.get_exercise_report(asset, period)
+		pvtbl = tbl.reset_index().pivot(
+				index='EXE_DATE',
+				columns='K_LBOUND',
+				values='REMAIN_AMT')
+		pvtbl.fillna(0, inplace=True)
+		
+		#시작시점의 요일에 따라 그래프 설정 변경
+		loc_begin = (5 - pvtbl.tail(1).index.weekday) % 5
+		loc_begin = loc_begin.item(0)
 
+		#빈 컬럼 0으로 채우기
+		for col in self._LIST_INDEX_BUMP:
+			if not col in list(pvtbl.columns.values):
+				pvtbl[col] = 0.0
+
+		#빈 로우 0으로 채우기
+		date_index = pd.date_range(date.today(), periods=30, freq='D')
+		for row in date_index:
+			if not row in list(pvtbl.index):
+				if row.weekday() < 5:
+					pvtbl.loc[row] = [0]*pvtbl.shape[1]
+		
+		#로우에 주말이 있는 경우 제거
+		for idx_row, item_row in enumerate(list(pvtbl.index)):
+			if item_row.weekday() >= 5:
+				pvtbl.drop(pvtbl.index[idx_row])
+
+		#인덱스 날짜형식변경
+		pvtbl.index = pvtbl.index.map(lambda x: x.strftime('%m/%d'))
+		
+		#인덱스에 대해 정렬
+		pvtbl = pvtbl.sort_index()
+
+		#그래프출력
+		sns.heatmap(
+				data=pvtbl,
+				annot=True,
+				fmt=',.1f',
+				linewidths=0.5,
+				cmap='BuGn',
+				square=False,
+				vmin=0, vmax=20,
+				cbar=False,
+				mask=pvtbl<0.01,
+				ax=ax)
+
+		#그래프설정
+		ax.set_title(title, fontstyle='italic')
+		ax.tick_params(labelsize=12)
+		ax.hlines([range(0, pvtbl.shape[0]+1, 1)], *ax.get_xlim(), color='gray', linestyles='--')
+		ax.hlines([range(loc_begin+0, pvtbl.shape[0]+1, 5)], *ax.get_xlim(), color='black', linestyles='-')
+		ax.vlines([range(0, pvtbl.shape[1]+1, 1)], *ax.get_ylim(), color='gray', linestyles='--')
+		ax.vlines([range(0, pvtbl.shape[1]+1, 5)], *ax.get_ylim(), color='black', linestyles='-')
+
+		#Y레이블
+		for tick in ax.get_yticklabels():
+			tick.set_rotation(0)
+
+		#X레이블
+		xlabels = [int(float(label.get_text())) for label in ax.get_xticklabels()]
+		ax.set_xticklabels(xlabels)
+		ax.set_xlabel('행사가격%')
+
+		#그래프 반환
+		return fig, ax
 
 
 '''메인함수'''
 def main():
 	#시장분포 객체생성
 	distMarket = MarketDist()
-	distMarket.set_monthly_figure()
-	'''
+
 	#발행내역 조회 및 기록
 	listIssue = distMarket.transfer_basic_info('listIssue')
 	print('발행정보가 입력되었습니다.')
@@ -755,11 +958,6 @@ def main():
 	distMarket._create_log()
 	print('작업일자가 기록되었습니다.')
 	print(distMarket.eval_date + '\n')
-	'''
-	#print(distMarket.get_monthly_report())
-	#print(distMarket.get_monthly_report('SXE'))
-	#print(distMarket.get_monthly_report('HSC'))
-	#print(distMarket.get_monthly_report('HSI'))
 
 
 '''스트립트 파일 직접 수행되는 경우에만 실행'''

@@ -271,7 +271,7 @@ index_sql = \
 		"on TDATE.TRADE_DATE=QSPX.TRADE_DATE "
 		"left outer join (select * from BL_DATA where TICKER='HSI') 	QHSI "
 		"on TDATE.TRADE_DATE=QHSI.TRADE_DATE "
-		"where TDATE.TRADE_DATE>=replace('{date_from}','-') "
+		"where TDATE.TRADE_DATE>=replace('{date_from}','-') and TDATE.TRADE_DATE<replace('{eval_date}','-') "
 		"order by 1 ASC "
 	)
 
