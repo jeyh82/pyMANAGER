@@ -21,8 +21,13 @@ import matplotlib.pyplot as plt						#MATPLOTLIB
 from matplotlib import font_manager, rc				#MATPLOTLIB 한글폰트문제
 import seaborn as sns								#SEABORN
 
+import time
+#import getLVL_AST
+
+#불필요한 경고해제
 pd.options.mode.chained_assignment = None
 
+#SEABORN설정
 sns.set_context(
 		"paper",
 		rc={"font.size":12,
@@ -30,28 +35,10 @@ sns.set_context(
 			"axes.labelsize":12})
 sns.set_style("whitegrid",{'grid.linestyle': '--'})
 
+#MATPLOTLIB한글폰트설정
 font_name = font_manager.FontProperties(fname="c:/Windows/Fonts/NanumBarunGothicBold.ttf").get_name()
 rc('font', family=font_name)
 
-
-#plt.style.use('seaborn-white')
-#sns.set(font_scale=4.0)
-
-html_pygal = """
-<!DOCTYPE html>
-<html>
-  <head>
-  <script type="text/javascript" src="http://kozea.github.com/pygal.js/javascripts/svg.jquery.js"></script>
-  <script type="text/javascript" src="http://kozea.github.com/pygal.js/javascripts/pygal-tooltips.js"></script>
-    <!-- ... -->
-  </head>
-  <body>
-    <figure>
-      {pygal_render}
-    </figure>
-  </body>
-</html>
-"""
 
 '''함수'''
 def _get_end_of_month(date: str, format_in: str, format_out: str = '%Y-%m-%d'):
@@ -507,15 +494,28 @@ class MarketDist(object):
 		"""
 		#지수레벨정보로부터 퍼포먼스(최초기준가대비 현재지수레벨) 계산
 		for idx in range(1, self._MAX_DIM+1):
-			#최근일자 기준으로 계산
-			latest_level = self._latest_index.reset_index()
+			#컬럼명
 			name_str = 'NAME_AST' + str(idx)
+			level_str = 'LVL_AST' + str(idx)
 
+			#마스크설정
+			for name in self._LIST_INDEX[1:]:
+				latest_level = self._latest_index.reset_index().at[0, name]
+				ratio_mult = ratio_mult_in if name == target_asset else 100.0
+				mask = table[name_str] == name
+
+				table.loc[mask, level_str] = \
+					latest_level / table.loc[mask, name] * ratio_mult
+
+			#table['LVL_AST' + str(idx)] = 100.0
+			#TODO 함수 cython으로 빼서 속도개선 여지 있는지 확인
+			'''
 			table['LVL_AST' + str(idx)] = \
 				table.apply(
 						lambda row: np.NaN if row[name_str] not in self._LIST_INDEX else \
-									(ratio_mult_in if target_asset == row[name_str] else 100.0)* \
-									latest_level.at[0,row[name_str]]/row[row[name_str]], axis=1)
+									(ratio_mult_in if target_asset == row[name_str] else 100.0) * \
+									latest_level.at[0, row[name_str]] / row[row[name_str]], axis=1)
+			'''
 
 		#워스트퍼포머 계산
 		col_lvl = ['LVL_AST' + str(x) for x in range(1, self._MAX_DIM+1)]
@@ -525,7 +525,7 @@ class MarketDist(object):
 		table['WORST_LVL'] = table[col_lvl].min(axis=1)
 		table['WORST_AST'] = table[col_lvl].idxmin(axis=1)
 		table['WORST_AST'] = \
-			table.apply(
+			table[col_name].apply(
 				lambda row: np.NaN if row['WORST_AST'] is np.NaN else \
 							row['NAME_AST' + row['WORST_AST'][-1]], axis=1)
 
@@ -555,26 +555,29 @@ class MarketDist(object):
 			table[col] = round(table[col]/(10**order))
 			table[col] = table[col].astype(int)
 
+		#디폴트마스크 작성성
+		mask = pd.Series(
+				data=[True]*table.shape[0],
+				index=table.index)
+
 		#날짜에 따라 필터링
 		if date is not None:
-			mask = self._get_mask_date(table, date)
-			table = table[mask]
+			mask &= self._get_mask_date(table, date)
 
 		#기초자산에 따라필터링
 		if asset is not None:
-			mask = self._get_mask_asset(table,asset)
-			table = table[mask]
+			mask &= self._get_mask_asset(table,asset)
 
 		#발행사에 따라 필터링
 		if comp is not None:
-			table = table[table['COMP']==comp]
+			mask &= (table['COMP']==comp)
 
 		#원금보장비율에 따라 필터링
 		if prsv is not None:
-			table = table[table['PRSV_RATE']<=prsv]
+			mask &= (table['PRSV_RATE']<=prsv)
 		
 		#필터링된 결과값 반환
-		return table
+		return table[mask]
 
 	def get_active_list(self, date:str=None, asset:str=None, comp:str=None, prsv:float=100.0, order:int=0) -> pd.DataFrame:
 		"""기준일자 시점에서 활성화 목록 반환
@@ -767,7 +770,7 @@ class MarketDist(object):
 
 		#그래프 데이터 초기화
 		fig, (ax_issue, ax_exercise, ax_active) = \
-			plt.subplots(3, 1, figsize=(11, 15))
+			plt.subplots(3, 1, figsize=(11, 18))
 		grp_fig = [ax_issue, ax_exercise, ax_active, fig]
 		plt.subplots_adjust(hspace=0.4)
 
@@ -825,6 +828,15 @@ class MarketDist(object):
 					bbox_to_anchor=(1.15,0.5),
 					prop={'size':12})
 
+			#그래프위에 숫자출력
+			for patch in grp_fig[idx_col].patches:
+				height = patch.get_height()
+				grp_fig[idx_col].text(
+						patch.get_x()+patch.get_width()/2.0,
+						height+0.05,
+						'{:1.2f}'.format(height),
+						ha='center')
+
 		#그래프 반환
 		return grp_fig
 
@@ -853,15 +865,6 @@ class MarketDist(object):
 				columns='K_LBOUND',
 				values='REMAIN_AMT')
 		pvtbl.fillna(0, inplace=True)
-		
-		#시작시점의 요일에 따라 그래프 설정 변경
-		loc_begin = (5 - pvtbl.tail(1).index.weekday) % 5
-		loc_begin = loc_begin.item(0)
-
-		#빈 컬럼 0으로 채우기
-		for col in self._LIST_INDEX_BUMP:
-			if not col in list(pvtbl.columns.values):
-				pvtbl[col] = 0.0
 
 		#빈 로우 0으로 채우기
 		date_index = pd.date_range(date.today(), periods=30, freq='D')
@@ -869,17 +872,27 @@ class MarketDist(object):
 			if not row in list(pvtbl.index):
 				if row.weekday() < 5:
 					pvtbl.loc[row] = [0]*pvtbl.shape[1]
-		
+
 		#로우에 주말이 있는 경우 제거
 		for idx_row, item_row in enumerate(list(pvtbl.index)):
 			if item_row.weekday() >= 5:
-				pvtbl.drop(pvtbl.index[idx_row])
+				pvtbl.drop(pvtbl.index[idx_row], inplace=True)
+
+		#빈 컬럼 0으로 채우기
+		for col in self._LIST_INDEX_BUMP:
+			if not col in list(pvtbl.columns.values):
+				pvtbl[col] = 0.0
+
+		#인덱스에 대해 정렬
+		pvtbl.sort_index(axis=0, inplace=True)
+		pvtbl.sort_index(axis=1, inplace=True)
+
+		#시작시점의 요일에 따라 그래프 설정 변경
+		loc_begin = (pvtbl.tail(1).index.weekday+1) % 5
+		loc_begin = loc_begin.item(0)
 
 		#인덱스 날짜형식변경
 		pvtbl.index = pvtbl.index.map(lambda x: x.strftime('%m/%d'))
-		
-		#인덱스에 대해 정렬
-		pvtbl = pvtbl.sort_index()
 
 		#그래프출력
 		sns.heatmap(
@@ -918,8 +931,14 @@ class MarketDist(object):
 '''메인함수'''
 def main():
 	#시장분포 객체생성
-	distMarket = MarketDist()
+	start = time.time()
 
+	distMarket = MarketDist()
+	result = distMarket.draw_exercise_figure('HSC')
+	#q= getLVL_AST.test(5)
+	#print(q)
+
+	'''
 	#발행내역 조회 및 기록
 	listIssue = distMarket.transfer_basic_info('listIssue')
 	print('발행정보가 입력되었습니다.')
@@ -958,7 +977,9 @@ def main():
 	distMarket._create_log()
 	print('작업일자가 기록되었습니다.')
 	print(distMarket.eval_date + '\n')
-
+	'''
+	elapsed = time.time() - start
+	print(elapsed)
 
 '''스트립트 파일 직접 수행되는 경우에만 실행'''
 if __name__ == '__main__':
