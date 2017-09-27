@@ -116,7 +116,7 @@ class Connection(object):
 		conn_str = spec['user'] + ':' + spec['password'] + '@' + spec['host']
 
 		if spec['type'] == 'ORACLE':
-			conn_str = 'oracle://' + conn_str
+			conn_str = 'oracle+cx_oracle://' + conn_str
 		elif spec['type'] == 'MYSQL':
 			conn_str = 'mysql+mysqlconnector://' + conn_str + ":" + spec['port'] + "/" + spec['database']
 		else:

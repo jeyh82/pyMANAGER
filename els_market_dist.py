@@ -3,6 +3,9 @@
 :modified:          - 2017.08.17
 :note:              - 시장전체 ELS 분포에 대해서 조사 및 집계
 :TODO:				- 월간보고서 시작 시점이 매년 1월로 되어있는데 가급적이면 직전12개월 이런식으로 수정하자 (나중에)
+					- index레벨에서부터 min_index레벨을 만들어내고 (numba활용)
+					  거기서부터 낙인터치여부관찰하기로 한다
+					- 낙인레벨구조도 테이블에 입력하기로 한다
 """
 
 
@@ -30,9 +33,9 @@ pd.options.mode.chained_assignment = None
 #SEABORN설정
 sns.set_context(
 		"paper",
-		rc={"font.size":12,
+		rc={"font.size":13,
 			"axes.titlesize":13,
-			"axes.labelsize":12})
+			"axes.labelsize":13})
 sns.set_style("whitegrid",{'grid.linestyle': '--'})
 
 #MATPLOTLIB한글폰트설정
@@ -93,8 +96,8 @@ class MarketDist(object):
 		 78: 'BNP', 79: '하이' }
 
 	#그래프 출력에 사용하는 관심발행사 리스트
-	#_LIST_NAME_BIG_COMP = ['미래','KB','NH','삼성','한투','신한','신영','기타']
-	#_LIST_COLOR_BIG_COMP = ['#F36910','#FBCB35','#FF0000','#0052A5','#503200','#551A8B','#114F1C','#A9A9A9']
+	#_LIST_NAME_BIG_COMP = ['신영','미래','KB','NH','삼성','한투','신한','기타']
+	#_LIST_COLOR_BIG_COMP = ['#114F1C','#F36910','#FBCB35','#FF0000','#0052A5','#503200','#551A8B','#A9A9A9']
 	_LIST_NAME_BIG_COMP = ['신영','기타']
 	_LIST_COLOR_BIG_COMP = ['#114F1C','#A9A9A9']
 
@@ -107,6 +110,8 @@ class MarketDist(object):
 		self._dbRMS01 = database.Connection('spt','RMS01')
 		self._dbMYSQL = database.Connection('python','TESTDB')
 
+		self._hdf5_store = pd.io.pytables.HDFStore('./_hdf5/store.h5')
+
 		self._eval_date = today.strftime('%Y-%m-%d')
 		self._last_date = self._get_last_oper_date()
 
@@ -117,17 +122,17 @@ class MarketDist(object):
 		self._to_full_year = '2100-12-31'
 
 		#기초자산 테이블 불러오기
-		self._table_asset = \
-			self._dbMYSQL.select_table(
-					table_name='view_els_market_underlying_info',
-					index_col='ISIN_NO')
+		self._table_asset = self._hdf5_store('info_underlying')
+			#self._dbMYSQL.select_table(
+			#		table_name='view_els_market_underlying_info',
+			#		index_col='ISIN_NO')
 
 		#상환구조 테이블 불러오기
-		self._table_struct = \
-			self._dbMYSQL.query(
-					sql=query.next_exer_sql,
-					bind={'eval_date': self._eval_date},
-					index_col='ISIN_NO')
+		self._table_struct = self._hdf5_store('info_structure')
+			#self._dbMYSQL.query(
+			#		sql=query.next_exer_sql,
+			#		bind={'eval_date': self._eval_date},
+			#		index_col='ISIN_NO')
 
 		#인덱스가격 조회
 		self._table_index = \
@@ -152,10 +157,10 @@ class MarketDist(object):
 
 		for index, item in enumerate(self._table_basic):
 			#테이블 기본정보조회
-			table = \
-				self._dbMYSQL.select_table(
-						table_name=self._table_name[index],
-						index_col='ISIN_NO')
+			table = self._hdf5_store(item)
+				#self._dbMYSQL.select_table(
+				#		table_name=self._table_name[index],
+				#		index_col='ISIN_NO')
 			
 			#발행회사 정보추가
 			table['COMP'] = \
@@ -194,6 +199,7 @@ class MarketDist(object):
 
 
 	'''접근자'''
+	'''
 	@property
 	def dbRMS01(self):
 		return self._dbRMS01
@@ -265,9 +271,13 @@ class MarketDist(object):
 	@to_full_year.setter
 	def to_full_year(self, value):
 		raise Exception("ERROR _ private member")
+	'''
 
 
 	'''클래스 함수'''
+	def _get_lastest_index_px(self, asset):
+		return self._latest_index.reset_index().at[0, asset]
+
 	def _get_cust_name(self, cust_no):
 		"""회사코드를 회사명으로 변경
 
@@ -399,8 +409,6 @@ class MarketDist(object):
 		bind_param = \
 			{'last_date': self._last_date,
 			 'eval_date': self._eval_date}
-				#{'last_date':'2017-07-01',
-			# 'eval_date':'2017-09-04'}
 
 		#상환구조정보조회
 		rtn_asset = \
@@ -415,6 +423,37 @@ class MarketDist(object):
 				data_frame=rtn_asset,
 				if_exists='append',
 				col_info=query.exer_col,
+				index=False)
+
+		#쿼리결과값 반환
+		return rtn_asset
+
+	def transfer_ki_info(self):
+		"""낙인구조 정보 조회
+		- 시장전체 ELS상품들의 낙인구조 정보를 조회
+		- 최종적으로는 MYSQL데이터베이스에 다시 입력하기 위한 용도로 활용
+		- 최근작업일자 이후, 현재작업일자 이전에 발생한 데이터들에 대해서만 처리
+
+		:return: 낙인구조 데이터프레임 형태로 반환
+		"""
+		#바인드변수 설정
+		bind_param = \
+			{'last_date': self._last_date,
+			 'eval_date': self._eval_date}
+
+		#상환구조정보조회
+		rtn_asset = \
+			self._dbRMS01.query(
+					sql=query.ki_sql,
+					bind=bind_param,
+					index_col=None)
+
+		#조회 결과물 데이터베이스에 인서트
+		self._dbMYSQL.insert_table(
+				table_name='els_market_ki_info',
+				data_frame=rtn_asset,
+				if_exists='append',
+				col_info=query.ki_col,
 				index=False)
 
 		#쿼리결과값 반환
@@ -465,14 +504,6 @@ class MarketDist(object):
 		"""
 		return data_frame['STD_DATE'] <= date
 
-	def _get_mask_valid(self, data_frame:pd.DataFrame):
-		"""해당 데이터프레임 항목들 중에서 유의미한 값들에 대해서만 마스크작성
-
-		:param data_frame: 데이터프레임
-		:return: 데이터프레임 마스크 반환
-		"""
-		return data_frame['STD_DATE_EXER'].isnull()
-
 	def _get_monthly_table_empty(self) -> pd.DataFrame:
 		"""월간보고서 작성을 위한 기본 테이블 작성
 		"""
@@ -500,22 +531,12 @@ class MarketDist(object):
 
 			#마스크설정
 			for name in self._LIST_INDEX[1:]:
-				latest_level = self._latest_index.reset_index().at[0, name]
+				latest_level = self._get_lastest_index_px(name)
 				ratio_mult = ratio_mult_in if name == target_asset else 100.0
 				mask = table[name_str] == name
 
 				table.loc[mask, level_str] = \
 					latest_level / table.loc[mask, name] * ratio_mult
-
-			#table['LVL_AST' + str(idx)] = 100.0
-			#TODO 함수 cython으로 빼서 속도개선 여지 있는지 확인
-			'''
-			table['LVL_AST' + str(idx)] = \
-				table.apply(
-						lambda row: np.NaN if row[name_str] not in self._LIST_INDEX else \
-									(ratio_mult_in if target_asset == row[name_str] else 100.0) * \
-									latest_level.at[0, row[name_str]] / row[row[name_str]], axis=1)
-			'''
 
 		#워스트퍼포머 계산
 		col_lvl = ['LVL_AST' + str(x) for x in range(1, self._MAX_DIM+1)]
@@ -607,14 +628,14 @@ class MarketDist(object):
 					how='left',
 					rsuffix='_EXER')
 
-		#기본테이블정보가 유효하고 상환테이블정보가 없는 경우만
-		rtn_table = rtn_table[self._get_mask_valid(rtn_table)]
+		#상환테이블정보가 없는 경우만 필터링
+		mask = rtn_table['STD_DATE_EXER'].isnull()
 
 		#상환목록은 더이상 필요하지 않으므로 해당컬럼 제거
 		rtn_table.drop([col for col in rtn_table.columns if '_EXER' in col],axis=1,inplace=True)
 
 		#결과값 반환
-		return rtn_table
+		return rtn_table[mask]
 
 	def set_monthly_figure(self):
 		"""월간 금액 그래프결과를 기초자산별로 사전형태로 그루핑하여 반환
@@ -669,8 +690,8 @@ class MarketDist(object):
 		#발행정보 합계계산. EFF_DATE기준으로 합산한다는 것에 주의
 		table_issue_monthly = \
 			table_issue\
-				.groupby('EFF_DATE_MONTHLY')['FIRST_AMT']\
-				.agg(['sum'])\
+				.groupby('EFF_DATE_MONTHLY')['FIRST_AMT'] \
+				.agg(['sum']) \
 				.rename(columns={'sum':'ISSUE'})
 
 		#상환정보 합계계산. STD_DATE기준으로 합산한다는 것에 주의
@@ -689,9 +710,9 @@ class MarketDist(object):
 		rtn_table.fillna(0, inplace=True)
 
 		#발행잔액 계산하여 결합
-		rtn_table['ACTIVE'] = \
-			rtn_table\
-				.apply(lambda row:self.get_active_list(row['EOMONTH'], asset, comp, prsv, order)['FIRST_AMT'].sum(), axis=1)
+		for idx, item in rtn_table.iterrows():
+			rtn_table.loc[idx,'ACTIVE'] = \
+				self.get_active_list(item['EOMONTH'], asset, comp, prsv, order)['FIRST_AMT'].sum()
 
 		#인텍스를 JAN, FEB 형식으로 변경
 		rtn_table.index = rtn_table.index.map(lambda x: calendar.month_abbr[int(x[3:5])])
@@ -762,7 +783,7 @@ class MarketDist(object):
 		title = [item.replace('{prsv}', prsv) for item in title]
 
 		#그래프변수 설정
-		alpha = 0.6
+		alpha = 0.60
 
 		#입력변수 필터링
 		asset = None if asset == 'ALL' else asset
@@ -811,14 +832,14 @@ class MarketDist(object):
 						ax=grp_fig[idx_col],
 						color=self._LIST_COLOR_BIG_COMP[(idx_comp+1)*-1],
 						alpha=alpha,
-						linewidth=1.5,
+						linewidth=1.25,
 						edgecolor='black')
 
 			#그래프설정
 			yticks = ['{:3,.2f}'.format(tick) for tick in grp_fig[idx_col].get_yticks()]
 			grp_fig[idx_col].set_yticklabels(yticks)
 			grp_fig[idx_col].set_title(title[idx_col], fontstyle='italic')
-			grp_fig[idx_col].tick_params(labelsize=12)
+			grp_fig[idx_col].tick_params(labelsize=13)
 			grp_fig[idx_col].grid(True, which='both')
 			grp_fig[idx_col].legend(
 					list_legend,
@@ -826,7 +847,7 @@ class MarketDist(object):
 					loc='right',
 					ncol=1,
 					bbox_to_anchor=(1.15,0.5),
-					prop={'size':12})
+					prop={'size':13})
 
 			#그래프위에 숫자출력
 			for patch in grp_fig[idx_col].patches:
@@ -889,7 +910,7 @@ class MarketDist(object):
 
 		#시작시점의 요일에 따라 그래프 설정 변경
 		loc_begin = (pvtbl.tail(1).index.weekday+1) % 5
-		loc_begin = loc_begin.item(0)
+		loc_begin = loc_begin._data.item(0)
 
 		#인덱스 날짜형식변경
 		pvtbl.index = pvtbl.index.map(lambda x: x.strftime('%m/%d'))
@@ -909,7 +930,7 @@ class MarketDist(object):
 
 		#그래프설정
 		ax.set_title(title, fontstyle='italic')
-		ax.tick_params(labelsize=12)
+		ax.tick_params(labelsize=13)
 		ax.hlines([range(0, pvtbl.shape[0]+1, 1)], *ax.get_xlim(), color='gray', linestyles='--')
 		ax.hlines([range(loc_begin+0, pvtbl.shape[0]+1, 5)], *ax.get_xlim(), color='black', linestyles='-')
 		ax.vlines([range(0, pvtbl.shape[1]+1, 1)], *ax.get_ylim(), color='gray', linestyles='--')
@@ -920,12 +941,22 @@ class MarketDist(object):
 			tick.set_rotation(0)
 
 		#X레이블
-		xlabels = [int(float(label.get_text())) for label in ax.get_xticklabels()]
-		ax.set_xticklabels(xlabels)
 		ax.set_xlabel('행사가격%')
+		last_px = self._get_lastest_index_px(asset)
+		xlabels = ['{:>5,.2f}'.format(last_px*float(label.get_text())/100.0)+'   '+'{:>3d}'.format(int(float(label.get_text()))) for label in ax.get_xticklabels()]
+		ax.set_xticklabels(xlabels)
+		for tick in ax.get_xticklabels():
+			tick.set_rotation(90)
 
 		#그래프 반환
 		return fig, ax
+
+	def update_to_hdf5(self):
+
+		self._hdf5_store['basic_info'] = self._dbMYSQL.select_table('els_market_basic_info','ISIN_NO')
+		self._hdf5_store['issue_info'] = self._dbMYSQL.select_table('els_market_issue_info', 'ISIN_NO')
+		self._hdf5_store['exercise_info'] = self._dbMYSQL.select_table('els_market_exercise_info', 'ISIN_NO')
+
 
 
 '''메인함수'''
@@ -934,27 +965,29 @@ def main():
 	start = time.time()
 
 	distMarket = MarketDist()
-	result = distMarket.draw_exercise_figure('HSC')
+	#result = distMarket.draw_exercise_figure('HSC')
 	#q= getLVL_AST.test(5)
 	#print(q)
 
-	'''
+	#기본정보 조회 및 기록
+	listBasic = distMarket.transfer_basic_info('listBasic')
+	print('기본정보가 입력되었습니다.')
+	print('입력된 데이터 개수: ' + str(len(listBasic.index)) + '\n')
+	self._hdf5_store['els_market_basic_info'] = listBasic
+	#print(listActive)
+
 	#발행내역 조회 및 기록
 	listIssue = distMarket.transfer_basic_info('listIssue')
 	print('발행정보가 입력되었습니다.')
 	print('입력된 데이터 개수: ' + str(len(listIssue.index)) + '\n')
-	#print(listActive)
-
-	#기본정보 조회 및 기록
-	listActive = distMarket.transfer_basic_info('listInit')
-	print('기본정보가 입력되었습니다.')
-	print('입력된 데이터 개수: ' + str(len(listActive.index)) + '\n')
+	self._hdf5_store['els_market_issue_info'] = listIssue
 	#print(listActive)
 
 	#상환내역 조회 및 기록
 	listExercise = distMarket.transfer_basic_info('listExercise')
 	print('상환정보가 입력되었습니다.')
 	print('입력된 데이터 개수: ' + str(len(listExercise.index)) + '\n')
+	self._hdf5_store['els_market_exercise_info'] = listExercise
 	#print(listActive)
 	
 	#오늘 작업 내역 존재하지 않는 경우에만 작업
@@ -964,20 +997,35 @@ def main():
 		listUnderlying = distMarket.transfer_underlying_info()
 		print('기초자산정보가 입력되었습니다.')
 		print('입력된 데이터 개수: ' + str(len(listUnderlying.index)) + '\n')
+		self._hdf5_store['els_market_underlying_info'] = \
+			self._dbMYSQL.select_table('els_market_underlying_info','ISIN_NO')
 		#print(listUnderlying)
 	
 		#시장분포 상환구조 정보조회
 		listExercise = distMarket.transfer_structure_info()
 		print('구조정보가 입력되었습니다.')
 		print('입력된 데이터 개수: ' + str(len(listExercise['ISIN_NO'])) + '\n')
-		##print(listExercise)
+		self._hdf5_store['els_market_structure_info'] = \
+			self._dbMYSQL.select_table('els_market_structure_info')
+		#print(listExercise)
+
+		#시장분포 낙인레벨 정보조회
+		listKI = distMarket.transfer_ki_info()
+		print('낙인정보가 입력되었습니다.')
+		print('입력된 데이터 개수: ' + str(len(listKI['ISIN_NO'])) + '\n')
+		self._hdf5_store['els_market_ki_info'] = \
+			self._dbMYSQL.select_table('els_market_ki_info')
+		#print(listKI)
 
 	#작업일자 기록
 	distMarket._delete_log()
 	distMarket._create_log()
 	print('작업일자가 기록되었습니다.')
 	print(distMarket.eval_date + '\n')
-	'''
+
+
+
+
 	elapsed = time.time() - start
 	print(elapsed)
 

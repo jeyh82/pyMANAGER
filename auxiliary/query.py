@@ -187,7 +187,7 @@ exer_sql = \
 		"	select 	ISIN_NO, STND_DATE, XCISE_RATE, "
 		"			nvl(regexp_substr(nvl(ETC, 99), '[1-9]{1}[[:digit:]]{0,}', 1, 1), 0) LB, "
 		"			nvl(regexp_substr(nvl(ETC, 99), '[1-9]{1}[[:digit:]]{0,}', 1, 2), nvl(regexp_substr(nvl(ETC, 99), '[1-9]{1}[[:digit:]]{0,}', 1, 1), 0)) * "
-		"			case when DECODE(ETC, NULL, -1, 1) < 0 then - 1 else 1 end UB "
+		"			case when decode(ETC, NULL, -1, 1) < 0 then - 1 else 1 end UB "
 		"	from INFO_KSD_UNDERLYING "
 		"	where INDEX_TYPE = '5' "
 		") tmpB "
@@ -204,6 +204,40 @@ exer_sql = \
 		") tmpC "
 		"on tmpA.ISIN_NO = tmpC.ISIN_NO "
 	)
+
+#낙인정보조회
+	#컬럼 데이터타입
+ki_col = \
+	{'ISIN_NO': types.NVARCHAR(50),
+	 'EXE_LVL':types.Float()}
+
+	#쿼리문
+ki_sql = \
+	(
+		"select ISIN_NO, min(levelKI) EXE_LVL "
+		"from "
+		"( "
+		"	select AC.ISIN_NO, min(AC.STND_DATE) STND_DATE, AC.ESTIM_TYPE ESTIM_TYPE, "
+		"			least(to_number(replace(NVL(regexp_substr(regexp_replace(max(AC.AUTO_REFUND_COND), "
+		"			'KOSPI200|NIKKEI225|HSCEI|STOXX50|S.P500|HSI'), "
+		"		  	'[1-9]{1}[[:digit:]]{1,}\.{0,1}[[:digit:]]{0,}[[:space:]]{0,1}%{1,}'), 999), '%')), "
+		"			decode(min(UD.XCISE_RATE), 0, 999, NULL, 999, min(UD.XCISE_RATE))) levelKI "
+		"	from INFO_KSD_AUTOCALL AC "
+		"	left outer join INFO_KSD_UNDERLYING UD "
+		"	on 	AC.ISIN_NO = UD.ISIN_NO and "
+		"		AC.STND_DATE = UD.STND_DATE and "
+		"		UD.INDEX_TYPE = 3 and "
+		"		UD.SEQ = 1 " 
+		"	where 	AC.ESTIM_TYPE='2' and "
+		"			AC.ESTIM_NO>1 and "
+		"			AC.ESTIM_T_DATE>'19000101' "
+		"	group by AC.ISIN_NO, AC.ESTIM_T_DATE, AC.ESTIM_TYPE"
+		") "
+		"where 	STND_DATE>=replace('{last_date}','-') and "
+		"		STND_DATE<replace('{eval_date}','-') "
+		"group by ISIN_NO "
+	)
+
 
 #다음상환구조정보조회
 	#컬럼 데이터타입
