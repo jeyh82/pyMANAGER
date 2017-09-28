@@ -209,12 +209,12 @@ exer_sql = \
 	#컬럼 데이터타입
 ki_col = \
 	{'ISIN_NO': types.NVARCHAR(50),
-	 'EXE_LVL':types.Float()}
+	 'KI_LVL':types.Float()}
 
 	#쿼리문
 ki_sql = \
 	(
-		"select ISIN_NO, min(levelKI) EXE_LVL "
+		"select ISIN_NO, min(levelKI) KI_LVL "
 		"from "
 		"( "
 		"	select AC.ISIN_NO, min(AC.STND_DATE) STND_DATE, AC.ESTIM_TYPE ESTIM_TYPE, "
